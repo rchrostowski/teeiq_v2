@@ -39,12 +39,84 @@ def make_demo_data() -> pd.DataFrame:
   return df
 
 
+def build_text_report(df: pd.DataFrame, slot_minutes: int) -> str:
+  """Create a simple text report summarizing performance & pricing actions."""
+  total, booked, util, revenue, potential = kpis(df)
+  gap = potential - revenue
+
+  today_date = df["date"].max()
+  today_df = df[df["date"] == today_date]
+  t_total, t_booked, t_util, t_rev, t_pot = kpis(today_df) if not today_df.empty else (0, 0, 0.0, 0.0, 0.0)
+  t_gap = t_pot - t_rev
+
+  trend = daily_utilization(df)
+  avg_util_7d = trend["util"].tail(7).mean() * 100 if len(trend) >= 1 else 0.0
+
+  # basic pricing actions (top 10 softest slots)
+  actions = compute_pricing_actions(df, slot_minutes=slot_minutes, target_util=0.75, top_n=10)
+
+  lines = []
+  lines.append("TeeIQ Weekly Performance Report")
+  lines.append("=" * 32)
+  lines.append("")
+  lines.append(f"Tee-time interval: {slot_minutes} minutes")
+  lines.append("")
+  lines.append("Overall performance")
+  lines.append("-------------------")
+  lines.append(f"Total slots:       {total:,}")
+  lines.append(f"Booked slots:      {booked:,}")
+  lines.append(f"Utilization:       {util*100:.1f}%")
+  lines.append(f"Booked revenue:    ${revenue:,.0f}")
+  lines.append(f"Potential revenue: ${potential:,.0f}")
+  lines.append(f"Revenue gap:       ${gap:,.0f}")
+  lines.append("")
+  lines.append("Most recent day")
+  lines.append("---------------")
+  lines.append(f"Date:              {today_date}")
+  lines.append(f"Slots:             {t_total:,}")
+  lines.append(f"Booked slots:      {t_booked:,}")
+  lines.append(f"Utilization:       {t_util*100:.1f}%")
+  lines.append(f"Booked revenue:    ${t_rev:,.0f}")
+  lines.append(f"Revenue gap:       ${t_gap:,.0f}")
+  lines.append("")
+  lines.append("Recent trend")
+  lines.append("------------")
+  lines.append(f"Average utilization over last 7 days: {avg_util_7d:.1f}%")
+  lines.append("")
+  lines.append("AI pricing suggestions (top softest blocks)")
+  lines.append("--------------------------------------------")
+
+  if actions.empty:
+    lines.append("No pricing suggestions available (not enough data).")
+  else:
+    lines.append(f"Showing {len(actions)} softest blocks by expected utilization:")
+    lines.append("")
+    for _, row in actions.iterrows():
+      lines.append(
+        f"- {row['Weekday']} @ {row['Time']}: "
+        f"Util {row['Expected Utilization']}, "
+        f"Avg {row['Average Price']}, "
+        f"Discount {row['Suggested Discount']}, "
+        f"New {row['New Price']}"
+      )
+
+  lines.append("")
+  lines.append("Next steps")
+  lines.append("----------")
+  lines.append("1) Apply recommended pricing on softest blocks.")
+  lines.append("2) Monitor utilization and revenue over the next 7 days.")
+  lines.append("3) Re-run TeeIQ to update your pricing plan.")
+
+  return "\n".join(lines)
+
+
 def main() -> None:
   inject_css()
 
   st.title("TeeIQ")
   st.caption("Run your course like a hedge fund. Slot-level pricing intelligence for golf tee sheets.")
 
+  # --- Sidebar: data source ---
   with st.sidebar:
     st.subheader("Data")
     tee_file = st.file_uploader("Upload tee-sheet CSV", type=["csv"])
@@ -61,12 +133,14 @@ def main() -> None:
     st.info("Upload a tee-sheet CSV or check 'Use demo data'.")
     return
 
+  # --- Clean data ---
   try:
     df = clean_teetimes(raw_df)
   except Exception as e:
     st.error(f"Data error: {e}")
     return
 
+  # --- Sidebar: tee time spacing ---
   slot_minutes = st.sidebar.selectbox(
     "Tee-time interval (minutes)",
     options=[5, 7, 8, 9, 10, 12, 15],
@@ -74,6 +148,7 @@ def main() -> None:
     help="Match your tee-sheet spacing.",
   )
 
+  # --- Top KPIs ---
   total, booked, util, revenue, potential = kpis(df)
   c1, c2, c3 = st.columns(3)
   with c1:
@@ -84,20 +159,40 @@ def main() -> None:
     gap = potential - revenue
     kpi("Revenue Gap", f"${gap:,.0f}", "Lost to empty or underpriced tee times")
 
-  tab_dash, tab_pricing, tab_util = st.tabs(
-    ["Executive Dashboard", "Pricing AI", "Utilization"]
+  # --- Tabs ---
+  tab_dash, tab_pricing, tab_util, tab_reports = st.tabs(
+    ["Executive Dashboard", "Pricing AI", "Utilization", "Reports"]
   )
 
+  # --- EXECUTIVE DASHBOARD ---
   with tab_dash:
     st.markdown('<div class="section-header">Booking Trend</div>', unsafe_allow_html=True)
     trend = daily_utilization(df)
-    fig, ax = plt.subplots(figsize=(8, 3))
-    ax.plot(trend["date"], trend["util"] * 100, marker="o")
-    ax.set_ylabel("Utilization (%)")
-    ax.set_xlabel("Date")
-    ax.grid(True, alpha=0.3)
-    st.pyplot(fig, use_container_width=True)
+    if trend.empty:
+      st.info("Not enough data to show a trend.")
+    else:
+      fig, ax = plt.subplots(figsize=(8, 3))
+      ax.plot(trend["date"], trend["util"] * 100, marker="o")
+      ax.set_ylabel("Utilization (%)")
+      ax.set_xlabel("Date")
+      ax.grid(True, alpha=0.3)
+      st.pyplot(fig, use_container_width=True)
 
+    st.markdown('<div class="section-header">Most Recent Day Snapshot</div>', unsafe_allow_html=True)
+    today = df[df["date"] == df["date"].max()]
+    if today.empty:
+      st.info("No data for the most recent day.")
+    else:
+      t_total, t_booked, t_util, t_rev, t_pot = kpis(today)
+      cc1, cc2, cc3 = st.columns(3)
+      with cc1:
+        kpi("Today Utilization", f"{t_util*100:.0f}%", f"{t_booked:,}/{t_total:,} slots")
+      with cc2:
+        kpi("Today Revenue", f"${t_rev:,.0f}", "")
+      with cc3:
+        kpi("Today Gap", f"${(t_pot - t_rev):,.0f}", "")
+
+  # --- PRICING AI ---
   with tab_pricing:
     st.markdown('<span class="badge-ai">AI HIO · Hole-in-One Insights</span>', unsafe_allow_html=True)
     st.markdown('<div class="section-header">Dynamic Pricing Suggestions</div>', unsafe_allow_html=True)
@@ -127,6 +222,7 @@ def main() -> None:
         st.caption("These are your softest blocks. Discount and market them first.")
         st.dataframe(actions, use_container_width=True)
 
+  # --- UTILIZATION ---
   with tab_util:
     st.markdown('<div class="section-header">Weekly Utilization Heatmap (by hour)</div>', unsafe_allow_html=True)
     mat = utilization_matrix_hour(df)
@@ -162,6 +258,29 @@ def main() -> None:
             )
 
       st.pyplot(fig2, use_container_width=True)
+
+  # --- REPORTS ---
+  with tab_reports:
+    st.markdown('<div class="section-header">Generate Weekly Report</div>', unsafe_allow_html=True)
+    st.write(
+      "This creates a simple text report summarizing utilization, revenue, and AI pricing suggestions. "
+      "You can download it and share with your team."
+    )
+
+    if st.button("Generate report"):
+      report_text = build_text_report(df, slot_minutes)
+      st.text_area("Report preview", value=report_text, height=300)
+      st.download_button(
+        "Download report (.txt)",
+        data=report_text.encode(),
+        file_name="teeiq_report.txt",
+        mime="text/plain",
+      )
+
+
+if __name__ == "__main__":
+  main()
+
 
 
 if __name__ == "__main__":
