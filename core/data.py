@@ -2,12 +2,15 @@
 import numpy as np
 import pandas as pd
 
-WEEK_ORDER = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+WEEK_ORDER = [
+    "Monday", "Tuesday", "Wednesday",
+    "Thursday", "Friday", "Saturday", "Sunday"
+]
 
 
 def coerce_bool(x):
     if isinstance(x, (bool, np.bool_)):
- bool(x)
+        return bool(x)
     if isinstance(x, (int, float)):
         return x == 1
     if isinstance(x, str):
@@ -16,7 +19,7 @@ def coerce_bool(x):
 
 
 def ensure_datetime_col(df: pd.DataFrame) -> pd.DataFrame:
-    # Try obvious datetime columns first
+    """Find a datetime column or construct one."""
     for c in ["tee_time", "datetime", "start_time", "time", "date_time"]:
         if c in df.columns:
             df[c] = pd.to_datetime(df[c], errors="coerce")
@@ -24,9 +27,10 @@ def ensure_datetime_col(df: pd.DataFrame) -> pd.DataFrame:
                 df["tee_time"] = df[c]
                 return df
 
-    # Try (date + time) combo
+    # Try (date + time)
     date_cols = [c for c in df.columns if "date" in c.lower()]
     time_cols = [c for c in df.columns if "time" in c.lower()]
+
     if date_cols and time_cols:
         df["tee_time"] = pd.to_datetime(
             df[date_cols[0]].astype(str) + " " + df[time_cols[0]].astype(str),
@@ -35,21 +39,25 @@ def ensure_datetime_col(df: pd.DataFrame) -> pd.DataFrame:
         if df["tee_time"].notna().any():
             return df
 
-    raise ValueError("No datetime column found. Include 'tee_time' or (date + time).")
+    raise ValueError("No datetime column found. Provide a tee_time or (date + time).")
 
 
 def clean_teetimes(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Normalize tee-sheet CSV into a standard format:
-    columns: tee_time, price, booked, weekday, hour, date
-    """
+    """Normalize tee-sheet CSV into a standard format."""
     df = df.copy()
     df = ensure_datetime_col(df)
-    df["price"] = pd.to_numeric(df.get("price", np.nan), errors="coerce")
 
-    # booked flag
+    # Normalize price
+    if "price" in df.columns:
+        df["price"] = pd.to_numeric(df["price"], errors="coerce")
+    else:
+        df["price"] = np.nan
+
+    # Booked flag
     book_col = next(
-        (c for c in df.columns if c.lower() in {"booked", "is_booked", "reserved", "filled", "status"}),
+        (c for c in df.columns if c.lower() in {
+            "booked", "is_booked", "reserved", "filled", "status"
+        }),
         None,
     )
     if book_col:
@@ -57,30 +65,30 @@ def clean_teetimes(df: pd.DataFrame) -> pd.DataFrame:
     else:
         df["booked"] = False
 
+    # Add time fields
     df["weekday"] = pd.Categorical(
         df["tee_time"].dt.day_name(), categories=WEEK_ORDER, ordered=True
     )
     df["hour"] = df["tee_time"].dt.hour
     df["date"] = df["tee_time"].dt.date
 
-    # fill missing price with per (weekday,hour) median, then global median
+    # Price cleaning
     if df["price"].isna().any():
-        grp_med = df.groupby(["weekday", "hour"])["price"].transform("median")
-        df["price"] = df["price"].fillna(grp_med).fillna(df["price"].median())
+        group_med = df.groupby(["weekday", "hour"])["price"].transform("median")
+        df["price"] = df["price"].fillna(group_med).fillna(df["price"].median())
 
     return df.sort_values("tee_time").reset_index(drop=True)
 
 
 def add_time_bins(df: pd.DataFrame, slot_minutes: int = 10) -> pd.DataFrame:
-    """
-    Create slot_index / slot_label / slot_hour / slot_minute
-    for N-minute tee intervals.
-    """
+    """Create slot_index / slot_label fields based on slot interval."""
     df = df.copy()
     dt = df["tee_time"]
+
     minute_of_day = dt.dt.hour * 60 + dt.dt.minute
     slot_index = (minute_of_day // slot_minutes).astype(int)
     slot_start_min = slot_index * slot_minutes
+
     slot_hour = (slot_start_min // 60).astype(int)
     slot_min = (slot_start_min % 60).astype(int)
 
@@ -88,7 +96,8 @@ def add_time_bins(df: pd.DataFrame, slot_minutes: int = 10) -> pd.DataFrame:
     df["slot_minutes"] = slot_minutes
     df["slot_label"] = slot_hour.astype(str).str.zfill(2) + ":" + slot_min.astype(str).str.zfill(2)
     df["slot_time"] = pd.to_datetime(
-        df["tee_time"].dt.date.astype(str) + " " + df["slot_label"]
+        df["tee_time"].dt.date.astype(str) + " " + df["slot_label"],
+        errors="coerce"
     )
     df["slot_hour"] = slot_hour
     df["slot_minute"] = slot_min
@@ -121,5 +130,7 @@ def utilization_matrix_hour(df: pd.DataFrame) -> pd.DataFrame:
         slots=("booked", "size"),
         booked=("booked", "sum"),
     )
-    grp["util"] = np.where(grp["slots"] > 0, grp["booked"] / grp["slots"], np.nan)
+    grp["util"] = np.where(
+        grp["slots"] > 0, grp["booked"] / grp["slots"], np.nan
+    )
     return grp["util"].unstack("hour").sort_index()
