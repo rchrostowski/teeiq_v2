@@ -4,7 +4,7 @@ import streamlit as st
 CSS = """
 <style>
 html, body, [class*="css"] {
-  font-family: 'Inter', sans-serif;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 .main {
   background-color: #f8f9fa;
@@ -46,22 +46,19 @@ html, body, [class*="css"] {
 </style>
 """
 
-def inject_css():
-    st.markdown(CSS, unsafe_allow_html=True)
 
-def kpi(title: str, value: str, sub: str = ""):
-    st.markdown(
-        f"""
-        <div class="kpi-card">
-          <div class="kpi-label">{title}</div>
-          <div class="kpi-value">{value}</div>
-          <div class="kpi-sub">{sub}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+def inject_css() -> None:
+  st.markdown(CSS, unsafe_allow_html=True)
 
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+
+def kpi(title: str, value: str, sub: str = "") -> None:
+  st.markdown(
+    f"""
+    <div class="kpi-card">
+      <div class="kpi-label">{title}</div>
+      <div class="kpi-value">{value}</div>
+      <div class="kpi-sub">{sub}</div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+  )
